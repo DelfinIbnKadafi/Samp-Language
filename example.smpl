@@ -1,0 +1,31 @@
+let name[MAX_PLAYERS] : string[64]
+let money : integer = 0
+
+OnGame()
+    print("Server is start!")
+    return true
+
+PlayerJoin(id)
+    name = GetName(id)
+    Send(id, ffffffff, "Welcome {name}")
+    SendAll(00ff00ff, "{name[id]} joined server")
+    return true
+
+PlayerChat(id, text[])
+    let x : float
+    let y : float
+    let z : float
+
+    GetPos(id, x, y, z)
+
+    let i : integer
+    for i range 0, MAX_PLAYER
+        if GetRadius(id, x, y, z) smaller 20+1
+            Send(i, ffffffff, "{name[id]} says: {text})
+
+    Send(id, ffffffff, "{name[id]} says: {text})
+
+    return false
+
+PlayerLeave(id, reason)
+    SendAll(ff0000ff, "{name[id]} leaved server")
