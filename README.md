@@ -14,7 +14,7 @@ PlayerJoin(id)
 
 # Why is better?
 
-In thus language, you doesn't need any complicated symbol,
+In this language, you doesn't need any complicated symbol,
 just use English language.
 
 Seems like python but different.
