@@ -74,9 +74,13 @@ Example :
 let isnumber : integer = 11
 
 main()
-    isnumber = number - 10
+    isnumber -=  10
 
 // and now, isnumber = 1
+```
+
+```smpl
+isnumber += 1
 ```
 
 For another guide, read GUIDE.md
