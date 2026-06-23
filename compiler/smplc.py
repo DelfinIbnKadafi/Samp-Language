@@ -5,18 +5,17 @@ Samp Language Compiler
 Compiler for SAMP LANGUAGE (.smpl) -> Pawn (.pwn) for SA-MP / open.mp servers.
 
 Usage:
-    python smplc.py file1.smpl [file2.smpl ...]
-    python smplc.py folder/
+    python smplc.py file.smpl
 
-The generated .pwn files will be written next to their .smpl sources.
-
-See guide.txt for full language syntax documentation.
+The generated .pwn file will be written next to the .smpl source.
 """
 
 import sys
 import os
 import re
-import glob
+
+from callbacks import CALLBACKS, CALLBACK_PARAM_COUNT
+from natives import NATIVES
 
 VERSION = "0.2.0"
 
@@ -25,16 +24,21 @@ VERSION = "0.2.0"
 
 
 class LexError(Exception):
-    pass
+    def __init__(self, msg, line=None):
+        super().__init__(msg)
+        self.line = line
 
 
 class ParseError(Exception):
-    pass
+    def __init__(self, msg, line=None):
+        super().__init__(msg)
+        self.line = line
 
 
 class CompileError(Exception):
-    pass
-
+    def __init__(self, msg, line=None):
+        super().__init__(msg)
+        self.line = line
 
 
 # 2. LEXER
@@ -93,7 +97,8 @@ def tokenize(source: str):
             tokens.append(Tok('DEDENT', indent, lineno))
         if indent != indent_stack[-1]:
             raise LexError(
-                f"Line {lineno}: inconsistent indentation compared to the block above."
+                f"Line {lineno}: inconsistent indentation. Expected {indent_stack[-1]} spaces, got {indent}.",
+                line=lineno
             )
 
         pos = 0
@@ -102,7 +107,8 @@ def tokenize(source: str):
             m = TOKEN_REGEX.match(content, pos)
             if not m:
                 raise LexError(
-                    f"Line {lineno}: unknown character/token near '{content[pos:pos+10]}'"
+                    f"Line {lineno}: unknown character/token near '{content[pos:pos+10]}'",
+                    line=lineno
                 )
             kind = m.lastgroup
             val = m.group()
@@ -121,7 +127,6 @@ def tokenize(source: str):
         tokens.append(Tok('DEDENT', 0, lineno))
     tokens.append(Tok('ENDMARKER', None, lineno))
     return tokens, directives
-
 
 
 # 3. AST NODES
@@ -145,10 +150,12 @@ class VarDecl(Node):
 
 
 class Assign(Node):
-    def __init__(self, name, expr, index=None):
+    def __init__(self, name, expr, index=None, op='=', line=None):
         self.name = name
         self.expr = expr
         self.index = index
+        self.op = op
+        self.line = line
 
 
 class Return(Node):
@@ -165,17 +172,19 @@ class If(Node):
 
 
 class FuncDef(Node):
-    def __init__(self, name, params, body, is_command=False):
+    def __init__(self, name, params, body, is_command=False, is_regular=False):
         self.name = name
         self.params = params
         self.body = body
         self.is_command = is_command
+        self.is_regular = is_regular
 
 
 class CallExpr(Node):
-    def __init__(self, name, args):
+    def __init__(self, name, args, line):
         self.name = name
         self.args = args
+        self.line = line
 
 
 class ExprStmt(Node):
@@ -205,8 +214,9 @@ class Logic(Node):
 
 
 class Ident(Node):
-    def __init__(self, name):
+    def __init__(self, name, line):
         self.name = name
+        self.line = line
 
 
 class Lit(Node):
@@ -216,10 +226,10 @@ class Lit(Node):
 
 
 class Index(Node):
-    def __init__(self, name, index):
+    def __init__(self, name, index, line):
         self.name = name
         self.index = index
-
+        self.line = line
 
 
 # 4. PARSER
@@ -259,7 +269,8 @@ class Parser:
             t = self.peek()
             expected = f"{type_} {value!r}" if value is not None else type_
             raise ParseError(
-                f"Line {t.line}: expected {expected}, got {t.type} {t.value!r}"
+                f"Line {t.line}: expected {expected}, got {t.type} {t.value!r}",
+                line=t.line
             )
         return self.advance()
 
@@ -276,21 +287,32 @@ class Parser:
         return prog
 
     def parse_top_level(self):
+        # Handle INDENT error early
+        if self.at('INDENT'):
+            t = self.peek()
+            raise ParseError(
+                f"Line {t.line}: unexpected indentation at top level.",
+                line=t.line
+            )
         if self.at('NAME', 'let'):
             d = self.parse_var_decl()
             self.expect('NEWLINE')
             return d
         if self.at('NAME', 'command'):
             return self.parse_func_def(is_command=True)
+        if self.at('NAME', 'function'):
+            self.advance()  # consume 'function'
+            return self.parse_func_def(is_command=False, is_regular=True)
         if self.at('NAME'):
-            return self.parse_func_def(is_command=False)
+            # Callback function (without 'function' keyword)
+            return self.parse_func_def(is_command=False, is_regular=False)
         t = self.peek()
-        raise ParseError(f"Line {t.line}: invalid top-level statement: {t.value!r}")
+        raise ParseError(f"Line {t.line}: invalid top-level statement: {t.value!r}", line=t.line)
 
     def parse_type(self):
         t = self.advance()
         if t.type != 'NAME' or t.value not in TYPE_KEYWORDS:
-            raise ParseError(f"Line {t.line}: unknown data type: {t.value!r}")
+            raise ParseError(f"Line {t.line}: unknown data type: {t.value!r}", line=t.line)
         vtype = t.value
         size = None
         if vtype == 'string':
@@ -299,7 +321,8 @@ class Parser:
             if size_tok.type not in ('NUMBER', 'NAME'):
                 raise ParseError(
                     f"Line {size_tok.line}: string size must be a number or constant, "
-                    f"got {size_tok.type} {size_tok.value!r}"
+                    f"got {size_tok.type} {size_tok.value!r}",
+                    line=size_tok.line
                 )
             size = str(size_tok.value)
             self.expect('OP', ']')
@@ -333,9 +356,10 @@ class Parser:
             break
         return params
 
-    def parse_func_def(self, is_command):
+    def parse_func_def(self, is_command, is_regular=False):
         if is_command:
-            self.expect('NAME', 'command')
+            # 'command' keyword already consumed
+            pass
         name = self.expect('NAME').value
         self.expect('OP', '(')
         params = self.parse_param_list()
@@ -344,7 +368,7 @@ class Parser:
         self.expect('INDENT')
         body = self.parse_block()
         self.expect('DEDENT')
-        return FuncDef(name, params, body, is_command)
+        return FuncDef(name, params, body, is_command, is_regular)
 
     def parse_block(self):
         stmts = []
@@ -358,7 +382,8 @@ class Parser:
         if self.at('INDENT'):
             t = self.peek()
             raise ParseError(
-                f"Line {t.line}: unexpected indentation (extra spaces compared to the previous line)."
+                f"Line {t.line}: unexpected indentation.",
+                line=t.line
             )
         if self.at('NAME', 'let'):
             d = self.parse_var_decl()
@@ -369,35 +394,45 @@ class Parser:
         if self.at('NAME', 'return'):
             self.advance()
             expr = None
-            if not self.at('NEWLINE'):
+            if not self.at('NEWLINE') and not self.at('DEDENT') and not self.at('ENDMARKER'):
                 expr = self.parse_expr()
             self.expect('NEWLINE')
             return Return(expr)
         if self.at('NAME'):
-            name = self.advance().value
-            if self.at('OP', '['):
-                self.advance()
-                idx = self.parse_expr()
-                self.expect('OP', ']')
-                self.expect('OP', '=')
-                val = self.parse_expr()
-                self.expect('NEWLINE')
-                return Assign(name, val, index=idx)
-            if self.at('OP', '='):
-                self.advance()
-                val = self.parse_expr()
-                self.expect('NEWLINE')
-                return Assign(name, val)
+            name_token = self.peek()
+            name = name_token.value
+            line = name_token.line
+            self.advance()
+            # Check for function call: NAME '('
             if self.at('OP', '('):
                 self.advance()
                 args = self.parse_arg_list()
                 self.expect('OP', ')')
                 self.expect('NEWLINE')
-                return ExprStmt(CallExpr(name, args))
-            t = self.peek()
-            raise ParseError(f"Line {t.line}: invalid statement after '{name}'")
+                return ExprStmt(CallExpr(name, args, line))
+            # Check for array index
+            idx = None
+            if self.at('OP', '['):
+                self.advance()
+                idx = self.parse_expr()
+                self.expect('OP', ']')
+            # Check for assignment operators
+            op = '='
+            if self.at('OP', '+') and self.peek(1).value == '=':
+                self.advance()
+                self.advance()
+                op = '+='
+            elif self.at('OP', '-') and self.peek(1).value == '=':
+                self.advance()
+                self.advance()
+                op = '-='
+            else:
+                self.expect('OP', '=')
+            val = self.parse_expr()
+            self.expect('NEWLINE')
+            return Assign(name, val, index=idx, op=op, line=line)
         t = self.peek()
-        raise ParseError(f"Line {t.line}: invalid statement: {t.value!r}")
+        raise ParseError(f"Line {t.line}: invalid statement: {t.value!r}", line=t.line)
 
     def parse_if(self):
         self.expect('NAME', 'if')
@@ -509,216 +544,163 @@ class Parser:
             v = self.advance().value
             return Lit(v == 'true', 'bool')
         if self.at('NAME'):
-            name = self.advance().value
+            name_token = self.peek()
+            name = name_token.value
+            line = name_token.line
+            self.advance()
             if self.at('OP', '('):
                 self.advance()
                 args = self.parse_arg_list()
                 self.expect('OP', ')')
-                return CallExpr(name, args)
+                return CallExpr(name, args, line)
             if self.at('OP', '['):
                 self.advance()
                 idx = self.parse_expr()
                 self.expect('OP', ']')
-                return Index(name, idx)
-            return Ident(name)
+                return Index(name, idx, line)
+            return Ident(name, line)
         t = self.peek()
-        raise ParseError(f"Line {t.line}: invalid expression at '{t.value!r}'")
+        raise ParseError(f"Line {t.line}: invalid expression at '{t.value!r}'", line=t.line)
 
 
+# 5. SEMANTIC ANALYZER
 
-# 5. MAPPING TABLES (callback & native) - see guide.txt for the full list
+
+class SymbolTable:
+    def __init__(self, parent=None):
+        self.symbols = {}
+        self.parent = parent
+
+    def declare(self, name, kind):
+        if name in self.symbols:
+            raise CompileError(f"Symbol '{name}' already declared in this scope")
+        self.symbols[name] = kind
+
+    def lookup(self, name):
+        if name in self.symbols:
+            return self.symbols[name]
+        if self.parent:
+            return self.parent.lookup(name)
+        return None
+
+    def enter_scope(self):
+        return SymbolTable(self)
+
+    def exit_scope(self):
+        return self.parent
 
 
-CALLBACKS = {
-    'OnGame': 'OnGameModeInit',
-    'OnGameExit': 'OnGameModeExit',
-    'IncomingConnection': 'OnIncomingConnection',
-    'PlayerJoin': 'OnPlayerConnect',
-    'PlayerLeave': 'OnPlayerDisconnect',
-    'PlayerFinishedDownloading': 'OnPlayerFinishedDownloading',
-    'PlayerChat': 'OnPlayerText',
-    'PlayerCommand': 'OnPlayerCommandText',
-    'PlayerSpawn': 'OnPlayerSpawn',
-    'PlayerDeath': 'OnPlayerDeath',
-    'PlayerRequestClass': 'OnPlayerRequestClass',
-    'PlayerRequestSpawn': 'OnPlayerRequestSpawn',
-    'PlayerEnterVehicle': 'OnPlayerEnterVehicle',
-    'PlayerExitVehicle': 'OnPlayerExitVehicle',
-    'PlayerStateChange': 'OnPlayerStateChange',
-    'PlayerInteriorChange': 'OnPlayerInteriorChange',
-    'PlayerKeyChange': 'OnPlayerKeyStateChange',
-    'PlayerUpdate': 'OnPlayerUpdate',
-    'PlayerStreamIn': 'OnPlayerStreamIn',
-    'PlayerStreamOut': 'OnPlayerStreamOut',
-    'PlayerPickup': 'OnPlayerPickUpPickup',
-    'PlayerEnterCheckpoint': 'OnPlayerEnterCheckpoint',
-    'PlayerLeaveCheckpoint': 'OnPlayerLeaveCheckpoint',
-    'PlayerEnterRaceCheckpoint': 'OnPlayerEnterRaceCheckpoint',
-    'PlayerLeaveRaceCheckpoint': 'OnPlayerLeaveRaceCheckpoint',
-    'PlayerClickPlayer': 'OnPlayerClickPlayer',
-    'PlayerClickMap': 'OnPlayerClickMap',
-    'PlayerClickTextDraw': 'OnPlayerClickTextDraw',
-    'PlayerClickPlayerTextDraw': 'OnPlayerClickPlayerTextDraw',
-    'PlayerGiveDamage': 'OnPlayerGiveDamage',
-    'PlayerTakeDamage': 'OnPlayerTakeDamage',
-    'PlayerGiveDamageActor': 'OnPlayerGiveDamageActor',
-    'PlayerWeaponShot': 'OnPlayerWeaponShot',
-    'PlayerEditObject': 'OnPlayerEditObject',
-    'PlayerEditAttachedObject': 'OnPlayerEditAttachedObject',
-    'PlayerSelectObject': 'OnPlayerSelectObject',
-    'VehicleSpawn': 'OnVehicleSpawn',
-    'VehicleDeath': 'OnVehicleDeath',
-    'VehicleMod': 'OnVehicleMod',
-    'VehiclePaintjob': 'OnVehiclePaintjob',
-    'VehicleRespray': 'OnVehicleRespray',
-    'VehicleDamage': 'OnVehicleDamageStatusUpdate',
-    'VehicleStreamIn': 'OnVehicleStreamIn',
-    'VehicleStreamOut': 'OnVehicleStreamOut',
-    'VehicleSirenStateChange': 'OnVehicleSirenStateChange',
-    'TrailerUpdate': 'OnTrailerUpdate',
-    'UnoccupiedVehicleUpdate': 'OnUnoccupiedVehicleUpdate',
-    'ActorStreamIn': 'OnActorStreamIn',
-    'ActorStreamOut': 'OnActorStreamOut',
-    'NPCSpawn': 'OnNPCSpawn',
-    'NPCDeath': 'OnNPCDeath',
-    'NPCRespawn': 'OnNPCRespawn',
-    'NPCTakeDamage': 'OnNPCTakeDamage',
-    'DialogResponse': 'OnDialogResponse',
-    'RconCommand': 'OnRconCommand',
-    'RconLogin': 'OnRconLoginAttempt',
-}
+class SemanticAnalyzer:
+    def __init__(self):
+        self.global_scope = SymbolTable()
+        self.current_scope = self.global_scope
+        self.errors = []
+        self.funcs_needing_forward = []
 
-CALLBACK_PARAM_COUNT = {
-    'OnGameModeInit': 0, 'OnGameModeExit': 0,
-    'OnIncomingConnection': 3,
-    'OnPlayerConnect': 1, 'OnPlayerDisconnect': 2,
-    'OnPlayerFinishedDownloading': 2,
-    'OnPlayerText': 2, 'OnPlayerCommandText': 2,
-    'OnPlayerSpawn': 1, 'OnPlayerDeath': 3,
-    'OnPlayerRequestClass': 2, 'OnPlayerRequestSpawn': 1,
-    'OnPlayerEnterVehicle': 3, 'OnPlayerExitVehicle': 2,
-    'OnPlayerStateChange': 3,
-    'OnPlayerInteriorChange': 3,
-    'OnPlayerKeyStateChange': 3,
-    'OnPlayerUpdate': 1, 'OnPlayerStreamIn': 2, 'OnPlayerStreamOut': 2,
-    'OnPlayerPickUpPickup': 2, 'OnPlayerEnterCheckpoint': 1,
-    'OnPlayerLeaveCheckpoint': 1, 'OnPlayerEnterRaceCheckpoint': 1,
-    'OnPlayerLeaveRaceCheckpoint': 1, 'OnPlayerClickPlayer': 3,
-    'OnPlayerClickMap': 4, 'OnPlayerClickTextDraw': 2,
-    'OnPlayerClickPlayerTextDraw': 2,
-    'OnPlayerGiveDamage': 5, 'OnPlayerTakeDamage': 5,
-    'OnPlayerGiveDamageActor': 5,
-    'OnPlayerWeaponShot': 7,
-    'OnPlayerEditObject': 8,
-    'OnPlayerEditAttachedObject': 11,
-    'OnPlayerSelectObject': 6,
-    'OnVehicleSpawn': 1, 'OnVehicleDeath': 2,
-    'OnVehicleMod': 3, 'OnVehiclePaintjob': 3, 'OnVehicleRespray': 4,
-    'OnVehicleDamageStatusUpdate': 2,
-    'OnVehicleStreamIn': 2, 'OnVehicleStreamOut': 2,
-    'OnVehicleSirenStateChange': 3,
-    'OnTrailerUpdate': 2,
-    'OnUnoccupiedVehicleUpdate': 7,
-    'OnActorStreamIn': 2, 'OnActorStreamOut': 2,
-    'OnNPCSpawn': 1, 'OnNPCDeath': 3, 'OnNPCRespawn': 1, 'OnNPCTakeDamage': 4,
-    'OnDialogResponse': 5,
-    'OnRconCommand': 1, 'OnRconLoginAttempt': 3,
-}
+    def analyze(self, prog):
+        # Register built-ins
+        for name in NATIVES:
+            self.global_scope.declare(name, 'native')
+        # Register callbacks
+        for name in CALLBACKS:
+            self.global_scope.symbols[name] = 'callback'
+        self.global_scope.declare('Send', 'native')
+        self.global_scope.declare('GetParams', 'native')
 
-NATIVES = {
-    'GetMoney': dict(pawn='GetPlayerMoney'),
-    'GiveMoney': dict(pawn='GivePlayerMoney'),
-    'ResetMoney': dict(pawn='ResetPlayerMoney'),
-    'GetHealth': dict(pawn='GetPlayerHealth', refs=[1]),
-    'SetHealth': dict(pawn='SetPlayerHealth'),
-    'GetArmour': dict(pawn='GetPlayerArmour', refs=[1]),
-    'SetArmour': dict(pawn='SetPlayerArmour'),
-    'GetPos': dict(pawn='GetPlayerPos', refs=[1, 2, 3]),
-    'SetPos': dict(pawn='SetPlayerPos'),
-    'SetPosFindZ': dict(pawn='SetPlayerPosFindZ'),
-    'GetFacingAngle': dict(pawn='GetPlayerFacingAngle', refs=[1]),
-    'SetFacingAngle': dict(pawn='SetPlayerFacingAngle'),
-    'GetInterior': dict(pawn='GetPlayerInterior'),
-    'SetInterior': dict(pawn='SetPlayerInterior'),
-    'GetVirtualWorld': dict(pawn='GetPlayerVirtualWorld'),
-    'SetVirtualWorld': dict(pawn='SetPlayerVirtualWorld'),
-    'GetName': dict(pawn='GetPlayerName', fills_buffer=True),
-    'SetName': dict(pawn='SetPlayerName'),
-    'GetIP': dict(pawn='GetPlayerIp', fills_buffer=True),
-    'GetPing': dict(pawn='GetPlayerPing'),
-    'GetSkin': dict(pawn='GetPlayerSkin'),
-    'SetSkin': dict(pawn='SetPlayerSkin'),
-    'GetScore': dict(pawn='GetPlayerScore'),
-    'SetScore': dict(pawn='SetPlayerScore'),
-    'GetWanted': dict(pawn='GetPlayerWantedLevel'),
-    'SetWanted': dict(pawn='SetPlayerWantedLevel'),
-    'GetState': dict(pawn='GetPlayerState'),
-    'GetSpecialAction': dict(pawn='GetPlayerSpecialAction'),
-    'SetSpecialAction': dict(pawn='SetPlayerSpecialAction'),
-    'GetKeys': dict(pawn='GetPlayerKeys', refs=[1, 2, 3]),
-    'IsConnected': dict(pawn='IsPlayerConnected'),
-    'IsInVehicle': dict(pawn='IsPlayerInVehicle'),
-    'IsInAnyVehicle': dict(pawn='IsPlayerInAnyVehicle'),
-    'IsStreamedIn': dict(pawn='IsPlayerStreamedIn'),
-    'IsNPC': dict(pawn='IsPlayerNPC'),
-    'IsAdmin': dict(pawn='IsPlayerAdmin'),
-    'IsInRange': dict(pawn='IsPlayerInRangeOfPoint'),
-    'GetDistance': dict(pawn='GetPlayerDistanceFromPoint'),
-    'SetTeam': dict(pawn='SetPlayerTeam'),
-    'GetTeam': dict(pawn='GetPlayerTeam'),
-    'SetColor': dict(pawn='SetPlayerColor'),
-    'GetColor': dict(pawn='GetPlayerColor'),
-    'SetControllable': dict(pawn='TogglePlayerControllable'),
-    'SetSpectating': dict(pawn='TogglePlayerSpectating'),
-    'SpectatePlayer': dict(pawn='PlayerSpectatePlayer'),
-    'SpectateVehicle': dict(pawn='PlayerSpectateVehicle'),
-    'Kick': dict(pawn='Kick'),
-    'Ban': dict(pawn='Ban'),
-    'BanEx': dict(pawn='BanEx'),
-    'Spawn': dict(pawn='SpawnPlayer'),
-    'ForceSpawn': dict(pawn='SpawnPlayer'),
-    'GiveWeapon': dict(pawn='GivePlayerWeapon'),
-    'ResetWeapons': dict(pawn='ResetPlayerWeapons'),
-    'GetWeapon': dict(pawn='GetPlayerWeapon'),
-    'GetAmmo': dict(pawn='GetPlayerAmmo'),
-    'SetAmmo': dict(pawn='SetPlayerAmmo'),
-    'SetArmedWeapon': dict(pawn='SetPlayerArmedWeapon'),
-    'SendAll': dict(pawn='SendClientMessageToAll'),
-    'SendPlayerMsg': dict(pawn='SendPlayerMessageToPlayer'),
-    'SendPlayerMsgAll': dict(pawn='SendPlayerMessageToAll'),
-    'GameText': dict(pawn='GameTextForPlayer'),
-    'GameTextAll': dict(pawn='GameTextForAll'),
-    'PlaySound': dict(pawn='PlayerPlaySound'),
-    'StopSound': dict(pawn='StopAudioStreamForPlayer'),
-    'PlayAudio': dict(pawn='PlayAudioStreamForPlayer'),
-    'Animation': dict(pawn='ApplyAnimation'),
-    'ClearAnim': dict(pawn='ClearAnimations'),
-    'GetAnimIndex': dict(pawn='GetPlayerAnimationIndex'),
-    'SetChatBubble': dict(pawn='SetPlayerChatBubble'),
-    'SetCamera': dict(pawn='SetPlayerCameraPos'),
-    'SetCameraLookAt': dict(pawn='SetPlayerCameraLookAt'),
-    'CameraBehind': dict(pawn='SetCameraBehindPlayer'),
-    'GetCameraPos': dict(pawn='GetPlayerCameraPos', refs=[1, 2, 3]),
-    'ShowDialog': dict(pawn='ShowPlayerDialog'),
-    'HideDialog': dict(pawn='HidePlayerDialog'),
-    'PutInVehicle': dict(pawn='PutPlayerInVehicle'),
-    'RemoveFromVehicle': dict(pawn='RemovePlayerFromVehicle'),
-    'GetVehicleID': dict(pawn='GetPlayerVehicleID'),
-    'GetVehicleSeat': dict(pawn='GetPlayerVehicleSeat'),
-    'CreateVeh': dict(pawn='CreateVehicle'),
-    'GetVehiclePos': dict(pawn='GetVehiclePos', refs=[1, 2, 3]),
-    'SetVehiclePos': dict(pawn='SetVehiclePos'),
-    'GetVehicleHealth': dict(pawn='GetVehicleHealth', refs=[1]),
-    'SetVehicleHealth': dict(pawn='SetVehicleHealth'),
-    'GetVehicleZAngle': dict(pawn='GetVehicleZAngle', refs=[1]),
-    'SetVehicleZAngle': dict(pawn='SetVehicleZAngle'),
-    'AddComponent': dict(pawn='AddVehicleComponent'),
-    'RemoveComponent': dict(pawn='RemoveVehicleComponent'),
-    'Repair': dict(pawn='RepairVehicle'),
-    'DestroyVehicle': dict(pawn='DestroyVehicle'),
-    'LinkToInterior': dict(pawn='LinkVehicleToInterior'),
-}
+        # First pass: collect global declarations
+        for node in prog.body:
+            if isinstance(node, VarDecl):
+                self.global_scope.declare(node.name, 'var')
+            elif isinstance(node, FuncDef):
+                if node.is_regular:
+                    self.global_scope.declare(node.name, 'func')
+                    self.funcs_needing_forward.append(node.name)
+                elif node.name in CALLBACKS:
+                    pass  # already registered
+                else:
+                    raise CompileError(
+                        f"Function '{node.name}' must be declared with 'function' keyword or be a known callback."
+                    )
 
+        # Second pass: analyze function bodies and global initializers
+        for node in prog.body:
+            if isinstance(node, FuncDef):
+                self.visit_funcdef(node)
+            elif isinstance(node, VarDecl):
+                if node.init:
+                    self.visit_expr(node.init)
+
+        return self.errors
+
+    def visit_funcdef(self, node):
+        old_scope = self.current_scope
+        self.current_scope = self.global_scope.enter_scope()
+        for param in node.params:
+            name = param.replace('[]', '')
+            self.current_scope.declare(name, 'param')
+        for stmt in node.body:
+            self.visit_stmt(stmt)
+        self.current_scope = old_scope
+
+    def visit_stmt(self, stmt):
+        if isinstance(stmt, VarDecl):
+            self.current_scope.declare(stmt.name, 'var')
+            if stmt.init:
+                self.visit_expr(stmt.init)
+        elif isinstance(stmt, Assign):
+            if not self.current_scope.lookup(stmt.name):
+                self.errors.append(f"Undefined variable '{stmt.name}' (line {stmt.line})")
+            if stmt.index:
+                self.visit_expr(stmt.index)
+            self.visit_expr(stmt.expr)
+        elif isinstance(stmt, Return):
+            if stmt.expr:
+                self.visit_expr(stmt.expr)
+        elif isinstance(stmt, ExprStmt):
+            self.visit_expr(stmt.expr)
+        elif isinstance(stmt, If):
+            self.visit_expr(stmt.cond)
+            old_scope = self.current_scope
+            self.current_scope = self.current_scope.enter_scope()
+            for s in stmt.body:
+                self.visit_stmt(s)
+            self.current_scope = old_scope
+            for econd, ebody in stmt.elifs:
+                self.visit_expr(econd)
+                old_scope = self.current_scope
+                self.current_scope = self.current_scope.enter_scope()
+                for s in ebody:
+                    self.visit_stmt(s)
+                self.current_scope = old_scope
+            if stmt.else_body:
+                old_scope = self.current_scope
+                self.current_scope = self.current_scope.enter_scope()
+                for s in stmt.else_body:
+                    self.visit_stmt(s)
+                self.current_scope = old_scope
+
+    def visit_expr(self, expr):
+        if isinstance(expr, Ident):
+            if not self.current_scope.lookup(expr.name):
+                self.errors.append(f"Undefined symbol '{expr.name}' (line {expr.line})")
+        elif isinstance(expr, CallExpr):
+            if not self.current_scope.lookup(expr.name):
+                self.errors.append(f"Undefined function '{expr.name}' (line {expr.line})")
+            for arg in expr.args:
+                self.visit_expr(arg)
+        elif isinstance(expr, Index):
+            self.visit_expr(expr.index)
+            if not self.current_scope.lookup(expr.name):
+                self.errors.append(f"Undefined array '{expr.name}' (line {expr.line})")
+        elif isinstance(expr, BinOp):
+            self.visit_expr(expr.left)
+            self.visit_expr(expr.right)
+        elif isinstance(expr, Compare):
+            self.visit_expr(expr.left)
+            self.visit_expr(expr.right)
+        elif isinstance(expr, Logic):
+            self.visit_expr(expr.left)
+            self.visit_expr(expr.right)
 
 
 # 6. CODE GENERATOR
@@ -732,6 +714,7 @@ class CodeGen:
         self.global_types = {}
         self.var_types = {}
         self.warnings = []
+        self.funcs_needing_forward = []
 
     def pad(self, level):
         return INDENT_UNIT * level
@@ -740,10 +723,12 @@ class CodeGen:
         if msg not in self.warnings:
             self.warnings.append(msg)
 
-    def gen_program(self, prog: Program, directives):
+    def gen_program(self, prog: Program, directives, funcs_needing_forward):
         self.global_types = {}
         self.var_types = {}
         self.warnings = []
+        self.funcs_needing_forward = funcs_needing_forward
+
         for node in prog.body:
             if isinstance(node, VarDecl):
                 self.global_types[node.name] = node.vtype
@@ -755,6 +740,16 @@ class CodeGen:
                 lines.append(d)
                 seen.add(d)
         if lines:
+            lines.append('')
+
+        # Forward declarations for regular functions
+        for func_name in self.funcs_needing_forward:
+            for node in prog.body:
+                if isinstance(node, FuncDef) and node.name == func_name and node.is_regular:
+                    params = ', '.join(node.params)
+                    lines.append(f"forward {func_name}({params});")
+                    break
+        if self.funcs_needing_forward:
             lines.append('')
 
         for node in prog.body:
@@ -920,7 +915,7 @@ class CodeGen:
         if isinstance(node, Logic):
             left = self.gen_cond(node.left)
             right = self.gen_cond(node.right)
-            return f"({left} {node.op} {right})"
+            return f"{left} {node.op} {right}"
         return self.gen_expr(node)
 
     def gen_stmt(self, node, level):
@@ -929,10 +924,14 @@ class CodeGen:
             return self.gen_vardecl(node, level)
         if isinstance(node, Assign):
             if node.index is not None:
-                return f"{p}{node.name}[{self.gen_expr(node.index)}] = {self.gen_expr(node.expr)};"
-            if self.var_types.get(node.name) == 'string':
+                base = f"{node.name}[{self.gen_expr(node.index)}]"
+            else:
+                base = node.name
+            if node.op in ('+=', '-='):
+                return f"{p}{base} {node.op} {self.gen_expr(node.expr)};"
+            if self.var_types.get(node.name) == 'string' and node.index is None:
                 return f'{p}format({node.name}, sizeof({node.name}), "%s", {self.gen_expr(node.expr)});'
-            return f"{p}{node.name} = {self.gen_expr(node.expr)};"
+            return f"{p}{base} = {self.gen_expr(node.expr)};"
         if isinstance(node, Return):
             if node.expr is None:
                 return f"{p}return;"
@@ -962,6 +961,7 @@ class CodeGen:
 
     def gen_funcdef(self, node: FuncDef, level=0):
         p = self.pad(level)
+
         if node.is_command:
             if len(node.params) >= 2 and not node.params[1].endswith('[]'):
                 self._warn(
@@ -969,6 +969,8 @@ class CodeGen:
                     f"command arguments must be declared as a string array, e.g. params[]."
                 )
             sig = f"{p}CMD:{node.name}({', '.join(node.params)})"
+        elif node.is_regular:
+            sig = f"{p}public {node.name}({', '.join(node.params)})"
         elif node.name in CALLBACKS:
             pawn_name = CALLBACKS[node.name]
             expected = CALLBACK_PARAM_COUNT.get(pawn_name)
@@ -980,12 +982,11 @@ class CodeGen:
                 )
             sig = f"{p}public {pawn_name}({', '.join(node.params)})"
         else:
-            sig = f"{p}{node.name}({', '.join(node.params)})"
+            raise CompileError(f"Function '{node.name}' is not a known callback and not declared with 'function'.")
 
         body_lines = [self.gen_stmt(s, level + 1) for s in node.body]
         body = '\n'.join(body_lines) if body_lines else f"{self.pad(level+1)}return 1;"
         return f"{sig}\n{p}{{\n{body}\n{p}}}"
-
 
 
 # 7. CLI
@@ -1000,8 +1001,14 @@ def compile_source(source, src_name="?"):
     tokens, directives = tokenize(source)
     parser = Parser(tokens)
     prog = parser.parse_program()
+
+    analyzer = SemanticAnalyzer()
+    errors = analyzer.analyze(prog)
+    if errors:
+        raise CompileError(errors[0])
+
     gen = CodeGen()
-    code = gen.gen_program(prog, directives)
+    code = gen.gen_program(prog, directives, analyzer.funcs_needing_forward)
     return HEADER_TEMPLATE.format(src=src_name, ver=VERSION) + code, gen.warnings
 
 
@@ -1012,46 +1019,38 @@ def compile_file(path):
     out_path = os.path.splitext(path)[0] + '.pwn'
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(code)
-    return out_path, warnings
-
-
-def gather_files(args):
-    files = []
-    for target in args:
-        if os.path.isdir(target):
-            files.extend(sorted(glob.glob(os.path.join(target, '*.smpl'))))
-        elif os.path.isfile(target):
-            files.append(target)
-        else:
-            print(f"[SKIP] '{target}' not found.")
-    return files
+    size = os.path.getsize(out_path)
+    return out_path, warnings, size
 
 
 def main():
     print(f"SAMPL Compiler v{VERSION}")
-    if len(sys.argv) < 2:
+
+    if len(sys.argv) != 2:
         print("Usage:")
-        print("  python smplc.py file1.smpl [file2.smpl ...]")
-        print("  python smplc.py folder/")
+        print("  python smplc.py file.smpl")
         sys.exit(1)
 
-    files = gather_files(sys.argv[1:])
-    if not files:
-        print("No .smpl files found.")
+    target = sys.argv[1]
+    if not os.path.isfile(target) or not target.endswith('.smpl'):
+        print("[ERROR] Please provide a single .smpl file.")
         sys.exit(1)
 
-    ok = 0
-    for f in files:
-        try:
-            out, warnings = compile_file(f)
-            print(f"[OK] {f} -> {out}")
-            for w in warnings:
-                print(f"   \u26a0 {w}")
-            ok += 1
-        except (LexError, ParseError, CompileError) as e:
-            print(f"[FAIL] {f}: {e}")
+    print(f"\n-> Starting compile {target}")
 
-    print(f"\nDone: {ok}/{len(files)} file(s) compiled successfully.")
+    try:
+        out_path, warnings, size = compile_file(target)
+        for w in warnings:
+            print(f"{target}: warning: {w}")
+        print(f"\nFile size: {size} bytes")
+        print("[OK] Compilation successful.")
+    except (LexError, ParseError, CompileError) as e:
+        line = getattr(e, 'line', None)
+        if line is not None:
+            print(f"{target}({line}): error: {e}")
+        else:
+            print(f"{target}: error: {e}")
+        sys.exit(1)
 
 
 if __name__ == '__main__':
