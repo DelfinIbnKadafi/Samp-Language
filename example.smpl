@@ -1,31 +1,82 @@
-let name[MAX_PLAYERS] : string[64]
-let money : integer = 0
+
+
+let spawn_x : float = 1958.3
+let spawn_y : float = 1343.1
+let spawn_z : float = 15.3
+
+let starter_money : integer = 5000
+
 
 OnGame()
-    print("Server is start!")
+    SendAll(0xFFFFFFFF, "Roleplay Server is now ONLINE!")
     return true
+
+
+OnGameExit()
+    SendAll(0xFFFFFFFF, "Server is shutting down...")
+    return true
+
 
 PlayerJoin(id)
-    name[id] = GetName(id)
-    Send(id, ffffffff, "Welcome {name}")
-    SendAll(00ff00ff, "{name[id]} joined server")
+    Send(id, 0x00FF00FF, "Welcome to RP Server!")
+    Send(id, 0xFFFFFFFF, "Use /help to see available commands")
+    GiveMoney(id, starter_money)
     return true
 
-PlayerChat(id, text[])
-    let x : float
-    let y : float
-    let z : float
-
-    GetPos(id, x, y, z)
-
-    let i : integer
-    for i range 0, MAX_PLAYER
-        if GetRadius(id, x, y, z) smaller 20+1
-            Send(i, ffffffff, "{name[id]} says: {text}")
-
-    Send(id, ffffffff, "{name[id]} says: {text})
-
-    return false
 
 PlayerLeave(id, reason)
-    SendAll(ff0000ff, "{name[id]} leaved server")
+    SendAll(0xFFFFFFFF, "A player has left the server.")
+    return true
+
+
+PlayerSpawn(id)
+    SetPos(id, spawn_x, spawn_y, spawn_z)
+    SetHealth(id, 100.0)
+    SetArmour(id, 0.0)
+    return true
+
+
+command help(id, params[])
+    Send(id, 0xFFFFFFFF, "===== HELP MENU =====")
+    Send(id, 0x00FF00FF, "/me [action] - roleplay action")
+    Send(id, 0x00FF00FF, "/do [desc] - describe situation")
+    Send(id, 0x00FF00FF, "/givecash [id] [amount]")
+    return true
+
+
+command me(id, params[])
+    if params is ""
+        Send(id, 0xFF0000FF, "Usage: /me [action]")
+        return false
+
+    SendAll(0xFFFF00FF, "* Player performs: {params}")
+    return true
+
+
+command do(id, params[])
+    if params is ""
+        Send(id, 0xFF0000FF, "Usage: /do [description]")
+        return false
+
+    SendAll(0xFFAA00FF, "* {params}")
+    return true
+
+
+command givecash(id, params[])
+    let target : integer
+    let amount : integer
+
+    if GetParams(params, "ii", target, amount) bigger 0
+        Send(id, 0xFF0000FF, "Usage: /givecash [id] [amount]")
+        return false
+
+    if amount smaller 1
+        Send(id, 0xFF0000FF, "Invalid amount")
+        return false
+
+    GiveMoney(id, amount * -1)
+    GiveMoney(target, amount)
+
+    Send(id, 0x00FF00FF, "You gave money successfully")
+    Send(target, 0x00FF00FF, "You received money from a player")
+    return true

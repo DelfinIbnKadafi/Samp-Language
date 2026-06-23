@@ -1,0 +1,175 @@
+1. NATIVE FUNCTIONS
+
+Native functions are built-in SA-MP functions.
+
+They can be called normally as statements or inside expressions.
+
+The compiler automatically converts friendly SAMPL function names
+into the correct Pawn native names.
+
+It also automatically adds "&" references for natives that require
+reference parameters in Pawn (such as "GetPos" or "GetHealth").
+
+You do NOT need to manually write "&" for mapped natives.
+
+Mapped native :
+
+GetMoney(id)  -> GetPlayerMoney(id)
+GiveMoney(id, amount)  -> GivePlayerMoney(id, amount)
+ResetMoney(id)  -> ResetPlayerMoney(id)
+GetHealth(id, hp)  -> GetPlayerHealth(id, &hp)
+SetHealth(id, hp)  -> SetPlayerHealth(id, hp)
+GetArmour(id, ar)  -> GetPlayerArmour(id, &ar)
+SetArmour(id, ar)  -> SetPlayerArmour(id, ar)
+GetPos(id, x, y, z)  -> GetPlayerPos(id, &x, &y, &z)
+SetPos(id, x, y, z)  -> SetPlayerPos(id, x, y, z)
+SetPosZ(id, x, y, z)  -> SetPlayerPosFindZ(id, x, y, z)
+GetAngle(id, a)  -> GetPlayerFacingAngle(id, &a)
+SetAngle(id, a)  -> SetPlayerFacingAngle(id, a)
+GetInterior(id)  -> GetPlayerInterior(id)
+SetInterior(id, intid)  -> SetPlayerInterior(id, intid)
+GetVW(id)  -> GetPlayerVirtualWorld(id)
+SetVW(id, vwid)  -> SetPlayerVirtualWorld(id, vwid)
+GetName(id)  -> GetPlayerName(id, buf, len)
+SetName(id, name)  -> SetPlayerName(id, name)
+GetSkin(id)  -> GetPlayerSkin(id)
+SetSkin(id, skin)  -> SetPlayerSkin(id, skin)
+GetScore(id)  -> GetPlayerScore(id)
+SetScore(id, score)  -> SetPlayerScore(id, score)
+GetWanted(id)  -> GetPlayerWantedLevel(id)
+SetWanted(id, level)  -> SetPlayerWantedLevel(id, level)
+GetState(id)  -> GetPlayerState(id)
+IsConnected(id)  -> IsPlayerConnected(id)
+IsInVehicle(id, vid)  -> IsPlayerInVehicle(id, vid)
+IsInAnyVehicle(id)  -> IsPlayerInAnyVehicle(id)
+IsNPC(id)  -> IsPlayerNPC(id)
+IsAdmin(id)  -> IsPlayerAdmin(id)
+IsInRange(id, r, x, y, z)  -> IsPlayerInRangeOfPoint(id, r, x, y, z)
+SetTeam(id, team)  -> SetPlayerTeam(id, team)
+GetTeam(id)  -> GetPlayerTeam(id)
+SetColor(id, color)  -> SetPlayerColor(id, color)
+GetColor(id)  -> GetPlayerColor(id)
+Freeze(id, toggle)  -> TogglePlayerControllable(id, toggle)
+Spectate(id, toggle)  -> TogglePlayerSpectating(id, toggle)
+Kick(id)  -> Kick(id)
+Ban(id)  -> Ban(id)
+BanEx(id, reason)  -> BanEx(id, reason)
+Spawn(id)  -> SpawnPlayer(id)
+GiveWeapon(id, wep, ammo)  -> GivePlayerWeapon(id, wep, ammo)
+ResetWeapons(id)  -> ResetPlayerWeapons(id)
+GetWeapon(id)  -> GetPlayerWeapon(id)
+GetAmmo(id)  -> GetPlayerAmmo(id)
+Send(id, c, txt)  -> SendClientMessage(id, c, txt)
+SendAll(c, txt)  -> SendClientMessageToAll(c, txt)
+GameText(id, txt, t, s)  -> GameTextForPlayer(id, txt, t, s)
+GameTextAll(txt, t, s)  -> GameTextForAll(txt, t, s)
+PutInVehicle(id, vid, s)  -> PutPlayerInVehicle(id, vid, s)
+GetVehicleID(id)  -> GetPlayerVehicleID(id)
+GetVehicleSeat(id)  -> GetPlayerVehicleSeat(id)
+GetVehiclePos(v, x, y, z)  -> GetVehiclePos(v, &x, &y, &z)
+SetVehiclePos(v, x, y, z)  -> SetVehiclePos(v, x, y, z)
+GetVehicleHP(v, hp)  -> GetVehicleHealth(v, &hp)
+SetVehicleHP(v, hp)  -> SetVehicleHealth(v, hp)
+Repair(v)  -> RepairVehicle(v)
+DestroyVehicle(v)  -> DestroyVehicle(v)
+
+Special note about "GetName":
+
+"GetPlayerName" in Pawn does NOT directly return a string.
+
+Because of that, "GetName()" may ONLY be used inside declarations:
+
+let name : string[24] = GetName(id)
+
+which automatically becomes:
+
+new name[24];
+GetPlayerName(id, name, 24);
+
+Using "GetName()" directly inside expressions is NOT supported.
+
+Invalid example:
+
+Send(id, GetName(id))
+
+Correct approach:
+
+let name : string[24] = GetName(id)
+Send(id, name)
+
+Special note about "Send":
+
+Send(id, text)
+
+uses the default green color:
+
+0x00FF00FF
+
+Custom colors are also supported:
+
+Send(id, 0xFF0000FF, "Error")
+
+2. CUSTOM FUNCTIONS & UNMAPPED NATIVES
+
+SAMPL is NOT limited to the built-in callback and native tables.
+
+Any function name that does NOT exist inside the callback/native
+mapping tables is automatically passed directly into the generated
+Pawn file unchanged.
+
+This means:
+
+- Unmapped SA-MP natives such as "CreateVehicle",
+  "CreateObject", "TextDrawCreate", etc. can already be used
+  immediately without updating the compiler.
+- Your own helper functions also work automatically.
+
+Example:
+
+PlayerSpawn(id)
+    CreateVehicle(411, 1958.3, 1343.1, 15.3, 0.0, -1, -1, -1)
+    return true
+
+Important note:
+
+If an unmapped native uses reference parameters ("&" in Pawn),
+you must manually add "&" yourself because the compiler only
+automatically inserts references for mapped natives.
+
+3. ADDING CUSTOM NATIVES TO THE COMPILER
+
+Even if a native is not mapped yet, you can already use it through
+passthrough mode (see section 10).
+
+However, if you want shorter aliases such as:
+
+GetCash()
+
+instead of:
+
+GetPlayerMoney()
+
+you can edit the "NATIVES" dictionary inside "smplc.py".
+
+Example:
+
+'GetCash': dict(pawn='GetPlayerMoney'),
+
+If the native requires reference parameters ("&" in Pawn), add a
+"refs" list containing the argument indexes that need references.
+
+Example:
+
+'GetHealth': dict(
+    pawn='GetPlayerHealth',
+    refs=[1]
+),
+
+To add custom callbacks, edit the "CALLBACKS" dictionary:
+
+'NameInSAMPL': 'OriginalPawnCallback',
+
+No rebuilding or recompilation is required after editing.
+
+"smplc.py" is a normal Python script and changes apply immediately
+after saving the file.

@@ -1,0 +1,81 @@
+1. SA-MP CALLBACK FUNCTIONS
+
+Functions and callbacks use the exact same syntax.
+
+No special keywords are required.
+
+Simply write the function name followed by parameters:
+
+FunctionName(parameter1, parameter2)
+    ...code...
+
+If the function name matches one of the mapped callback names listed
+below, the compiler automatically converts it into the correct Pawn
+callback and adds "public".
+
+If the name does NOT match a known callback, the function is treated
+as a normal Pawn function.
+
+Parameters can use any names you want.
+
+Array parameters (such as text input) use "[]" exactly like Pawn:
+
+PlayerChat(id, text[])
+    ...
+
+Mapped callback table:
+
+OnGame()  -> OnGameModeInit()
+OnGameExit()  -> OnGameModeExit()
+PlayerJoin(id)  -> OnPlayerConnect(playerid)
+PlayerLeave(id, reason)  -> OnPlayerDisconnect(playerid, reason)
+PlayerChat(id, text[])  -> OnPlayerText(playerid, text[])
+PlayerCommand(id, cmdtext[])  -> OnPlayerCommandText(playerid, cmdtext[])
+PlayerSpawn(id)  -> OnPlayerSpawn(playerid)
+PlayerDeath(id, killerid, weaponid)  -> OnPlayerDeath(playerid, killerid, reason)
+PlayerRequestClass(id, classid)  -> OnPlayerRequestClass(playerid, classid)
+PlayerRequestSpawn(id)  -> OnPlayerRequestSpawn(playerid)
+PlayerEnterVehicle(id, vehicleid, ispassenger)  -> OnPlayerEnterVehicle(playerid, vehicleid, ispassenger)
+PlayerExitVehicle(id, vehicleid)  -> OnPlayerExitVehicle(playerid, vehicleid)
+PlayerStateChange(id, newstate, oldstate)  -> OnPlayerStateChange(playerid, newstate, oldstate)
+PlayerKeyChange(id, newkeys, oldkeys)  -> OnPlayerKeyStateChange(playerid, newkeys, oldkeys)
+PlayerUpdate(id)  -> OnPlayerUpdate(playerid)
+PlayerStreamIn(id, forplayerid)  -> OnPlayerStreamIn(playerid, forplayerid)
+PlayerStreamOut(id, forplayerid)  -> OnPlayerStreamOut(playerid, forplayerid)
+PlayerPickup(id, pickupid)  -> OnPlayerPickUpPickup(playerid, pickupid)
+PlayerEnterCheckpoint(id)  -> OnPlayerEnterCheckpoint(playerid)
+PlayerLeaveCheckpoint(id)  -> OnPlayerLeaveCheckpoint(playerid)
+PlayerEnterRaceCheckpoint(id)  -> OnPlayerEnterRaceCheckpoint(playerid)
+PlayerLeaveRaceCheckpoint(id)  -> OnPlayerLeaveRaceCheckpoint(playerid)
+PlayerClickPlayer(id, clickedid, source)  -> OnPlayerClickPlayer(playerid, clickedplayerid, source)
+PlayerClickMap(id, x, y, z)  -> OnPlayerClickMap(playerid, Float:x, Float:y, Float:z)
+PlayerClickTextDraw(id, textdrawid)  -> OnPlayerClickTextDraw(playerid, Text:clickedid)
+PlayerGiveDamage(id, damagedid, amount, weaponid, bodypart)  -> OnPlayerGiveDamage(playerid, damagedid, amount, weaponid, bodypart)
+PlayerTakeDamage(id, issuerid, amount, weaponid, bodypart)  -> OnPlayerTakeDamage(playerid, issuerid, amount, weaponid, bodypart)
+PlayerWeaponShot(id, weaponid, hittype, hitid, x, y, z)  -> OnPlayerWeaponShot(playerid, weaponid, hittype, hitid, Float:x, Float:y, Float:z)
+VehicleSpawn(vehicleid)  -> OnVehicleSpawn(vehicleid)
+VehicleDeath(vehicleid, killerid)  -> OnVehicleDeath(vehicleid, killerid)
+VehicleMod(id, vehicleid, componentid)  -> OnVehicleMod(playerid, vehicleid, componentid)
+VehiclePaintjob(id, vehicleid, paintjobid)  -> OnVehiclePaintjob(playerid, vehicleid, paintjobid)
+VehicleRespray(id, vehicleid, color1, color2)  -> OnVehicleRespray(playerid, vehicleid, color1, color2)
+VehicleDamage(vehicleid, id)  -> OnVehicleDamageStatusUpdate(vehicleid, playerid)
+VehicleStreamIn(vehicleid, forplayerid)  -> OnVehicleStreamIn(vehicleid, forplayerid)
+VehicleStreamOut(vehicleid, forplayerid)  -> OnVehicleStreamOut(vehicleid, forplayerid)
+DialogResponse(id, dialogid, response, listitem, inputtext[])  -> OnDialogResponse(playerid, dialogid, response, listitem, inputtext[])
+RconCommand(cmd[])  -> OnRconCommand(cmd[])
+
+The most updated list is always available inside the "CALLBACKS"
+dictionary in "smplc.py".
+
+Examples:
+
+OnGame()
+    SendAll(0xFFFFFFFF, "Server ready")
+    return true
+
+PlayerJoin(id)
+    SetHealth(id, 100.0)
+    return true
+
+PlayerLeave(id, reason)
+    return true
