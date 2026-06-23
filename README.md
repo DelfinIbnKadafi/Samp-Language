@@ -83,7 +83,21 @@ For another guide, read GUIDE.md
 
 # Installation
 
-// comingsoon
+Clone this repository or Download latest release
+
+```Bash
+git clone https://github.com/DelfinIbnKadafi/Samp-Language.git
+```
+
+Open compiler folder
+```
+cd Samp-Language
+```
+
+compile your smpl file
+```
+python compiler/smplc.py fil_name.smpl
+```
 
 # License
 
