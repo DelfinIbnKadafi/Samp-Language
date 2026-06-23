@@ -141,22 +141,3 @@ uses the default green color:
 Custom colors are also supported:
 
 Send(id, 0xFF0000FF, "Error")
-
-2. CUSTOM FUNCTIONS
-
-If you want create custom functions, use function
-
-its seems like javascript.
-
-function PlayerGood(id)
-    ......
-
-And then compiler automatically convert to pawn like
-
-forward PlayerGood(id);
-
-
-public PlayerGood(id)
-{
-....
-}
