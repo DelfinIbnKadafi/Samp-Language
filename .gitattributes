@@ -1,0 +1,4 @@
+# SAMP Language - SMPL files
+*.smpl linguist-language=Samp Language
+*.smpl linguist-documentation=false
+*.smpl linguist-detectable=true
