@@ -109,67 +109,21 @@ Custom colors are also supported:
 
 Send(id, 0xFF0000FF, "Error")
 
-2. CUSTOM FUNCTIONS & UNMAPPED NATIVES
+2. CUSTOM FUNCTIONS
 
-SAMPL is NOT limited to the built-in callback and native tables.
+If you want create custom functions, use function
 
-Any function name that does NOT exist inside the callback/native
-mapping tables is automatically passed directly into the generated
-Pawn file unchanged.
+its seems like javascript.
 
-This means:
+function PlayerGood(id)
+    ......
 
-- Unmapped SA-MP natives such as "CreateVehicle",
-  "CreateObject", "TextDrawCreate", etc. can already be used
-  immediately without updating the compiler.
-- Your own helper functions also work automatically.
+And then compiler automatically convert to pawn like
 
-Example:
+forward PlayerGood(id);
 
-PlayerSpawn(id)
-    CreateVehicle(411, 1958.3, 1343.1, 15.3, 0.0, -1, -1, -1)
-    return true
 
-Important note:
-
-If an unmapped native uses reference parameters ("&" in Pawn),
-you must manually add "&" yourself because the compiler only
-automatically inserts references for mapped natives.
-
-3. ADDING CUSTOM NATIVES TO THE COMPILER
-
-Even if a native is not mapped yet, you can already use it through
-passthrough mode (see section 10).
-
-However, if you want shorter aliases such as:
-
-GetCash()
-
-instead of:
-
-GetPlayerMoney()
-
-you can edit the "NATIVES" dictionary inside "smplc.py".
-
-Example:
-
-'GetCash': dict(pawn='GetPlayerMoney'),
-
-If the native requires reference parameters ("&" in Pawn), add a
-"refs" list containing the argument indexes that need references.
-
-Example:
-
-'GetHealth': dict(
-    pawn='GetPlayerHealth',
-    refs=[1]
-),
-
-To add custom callbacks, edit the "CALLBACKS" dictionary:
-
-'NameInSAMPL': 'OriginalPawnCallback',
-
-No rebuilding or recompilation is required after editing.
-
-"smplc.py" is a normal Python script and changes apply immediately
-after saving the file.
+public PlayerGood(id)
+{
+....
+}
