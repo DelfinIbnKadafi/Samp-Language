@@ -3,7 +3,7 @@
 A specialized programming language designed for SA-MP
 
 Example :
-```sampl
+```smpl
 PlayerJoin(id)
     if id bigger 7
         return true
@@ -67,14 +67,14 @@ main()
 ```
 
 Or you want to reduce value?
-= Just use negative symbol
+Just use negative symbol
 
 Example :
 ```smpl
 let isnumber : integer = 11
 
 main()
-    isnumber = -10
+    isnumber = number - 10
 
 // and now, isnumber = 1
 ```
