@@ -105,4 +105,4 @@ python compiler/smplc.py fil_name.smpl
 
 # License
 
-Apatche 2.0
+Apache 2.0
