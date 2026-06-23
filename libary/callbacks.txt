@@ -75,6 +75,25 @@ OnGame()
 
 PlayerJoin(id)
     SetHealth(id, 100.0)
+
+2. CUSTOM FUNCTIONS
+
+If you want create custom functions, use function
+
+its seems like javascript.
+
+function PlayerGood(id)
+    ......
+
+And then compiler automatically convert to pawn like
+
+forward PlayerGood(id);
+
+
+public PlayerGood(id)
+{
+....
+}
     return true
 
 PlayerLeave(id, reason)
