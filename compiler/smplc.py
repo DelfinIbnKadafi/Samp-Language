@@ -2,16 +2,15 @@
 """
 Samp Language Compiler
 ==========================
-Compiler untuk SAMP LANGUAGE (.smpl) -> Pawn (.pwn) untuk server SA-MP.
+Compiler for SAMP LANGUAGE (.smpl) -> Pawn (.pwn) for SA-MP / open.mp servers.
 
-Pemakaian:
+Usage:
     python smplc.py file1.smpl [file2.smpl ...]
     python smplc.py folder/
 
-File .pwn hasil convert akan ditulis di folder yang sama dengan file .smpl
-sumbernya.
+The generated .pwn files will be written next to their .smpl sources.
 
-Lihat guide.txt untuk dokumentasi lengkap sintaksis bahasa.
+See guide.txt for full language syntax documentation.
 """
 
 import sys
@@ -19,11 +18,11 @@ import os
 import re
 import glob
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
- 
+
 # 1. ERRORS
- 
+
 
 class LexError(Exception):
     pass
@@ -37,9 +36,9 @@ class CompileError(Exception):
     pass
 
 
- 
+
 # 2. LEXER
- 
+
 
 TOKEN_REGEX = re.compile(r"""
     (?P<STRING>"([^"\\]|\\.)*")
@@ -64,9 +63,9 @@ class Tok:
 
 
 def tokenize(source: str):
-    """Mengubah source .smpl jadi list token + list baris #include mentah."""
+    """Convert .smpl source into a list of tokens + raw preprocessor directives."""
     tokens = []
-    includes = []
+    directives = []
     indent_stack = [0]
     lineno = 0
 
@@ -78,8 +77,8 @@ def tokenize(source: str):
         if stripped == '' or stripped.startswith('//'):
             continue
 
-        if stripped.startswith('#include'):
-            includes.append(stripped)
+        if stripped.startswith('#'):
+            directives.append(stripped)
             continue
 
         norm = line.replace('\t', '    ')
@@ -94,7 +93,7 @@ def tokenize(source: str):
             tokens.append(Tok('DEDENT', indent, lineno))
         if indent != indent_stack[-1]:
             raise LexError(
-                f"Baris {lineno}: indentasi tidak konsisten dengan blok di atasnya."
+                f"Line {lineno}: inconsistent indentation compared to the block above."
             )
 
         pos = 0
@@ -103,7 +102,7 @@ def tokenize(source: str):
             m = TOKEN_REGEX.match(content, pos)
             if not m:
                 raise LexError(
-                    f"Baris {lineno}: karakter/token tidak dikenal di sekitar '{content[pos:pos+10]}'"
+                    f"Line {lineno}: unknown character/token near '{content[pos:pos+10]}'"
                 )
             kind = m.lastgroup
             val = m.group()
@@ -121,12 +120,12 @@ def tokenize(source: str):
         indent_stack.pop()
         tokens.append(Tok('DEDENT', 0, lineno))
     tokens.append(Tok('ENDMARKER', None, lineno))
-    return tokens, includes
+    return tokens, directives
 
 
- 
+
 # 3. AST NODES
- 
+
 
 class Node:
     pass
@@ -140,16 +139,16 @@ class Program(Node):
 class VarDecl(Node):
     def __init__(self, name, vtype, size, init):
         self.name = name
-        self.vtype = vtype   # 'integer' | 'float' | 'bool' | 'string'
-        self.size = size     # hanya untuk string
-        self.init = init     # expr atau None
+        self.vtype = vtype
+        self.size = size
+        self.init = init
 
 
 class Assign(Node):
     def __init__(self, name, expr, index=None):
         self.name = name
         self.expr = expr
-        self.index = index   # expr atau None (untuk name[index] = expr)
+        self.index = index
 
 
 class Return(Node):
@@ -161,14 +160,14 @@ class If(Node):
     def __init__(self, cond, body):
         self.cond = cond
         self.body = body
-        self.elifs = []       # list of (cond, body)
+        self.elifs = []
         self.else_body = None
 
 
 class FuncDef(Node):
     def __init__(self, name, params, body, is_command=False):
         self.name = name
-        self.params = params  # list of string, bisa diakhiri '[]'
+        self.params = params
         self.body = body
         self.is_command = is_command
 
@@ -213,7 +212,7 @@ class Ident(Node):
 class Lit(Node):
     def __init__(self, value, kind):
         self.value = value
-        self.kind = kind   # 'number' | 'string' | 'bool' | 'hex'
+        self.kind = kind
 
 
 class Index(Node):
@@ -222,9 +221,9 @@ class Index(Node):
         self.index = index
 
 
- 
+
 # 4. PARSER
- 
+
 
 CMP_KEYWORDS = {'is': '==', 'not': '!=', 'bigger': '>', 'smaller': '<'}
 TYPE_KEYWORDS = ('integer', 'float', 'bool', 'string')
@@ -260,15 +259,13 @@ class Parser:
             t = self.peek()
             expected = f"{type_} {value!r}" if value is not None else type_
             raise ParseError(
-                f"Baris {t.line}: diharapkan {expected}, tapi dapat {t.type} {t.value!r}"
+                f"Line {t.line}: expected {expected}, got {t.type} {t.value!r}"
             )
         return self.advance()
 
     def skip_newlines(self):
         while self.at('NEWLINE'):
             self.advance()
-
-    # ---- top level -----------------------------------------------------
 
     def parse_program(self):
         prog = Program()
@@ -288,19 +285,22 @@ class Parser:
         if self.at('NAME'):
             return self.parse_func_def(is_command=False)
         t = self.peek()
-        raise ParseError(f"Baris {t.line}: statement top-level tidak valid: {t.value!r}")
-
-    # ---- deklarasi & tipe ------------------------------------------------
+        raise ParseError(f"Line {t.line}: invalid top-level statement: {t.value!r}")
 
     def parse_type(self):
         t = self.advance()
         if t.type != 'NAME' or t.value not in TYPE_KEYWORDS:
-            raise ParseError(f"Baris {t.line}: tipe data tidak dikenal: {t.value!r}")
+            raise ParseError(f"Line {t.line}: unknown data type: {t.value!r}")
         vtype = t.value
         size = None
         if vtype == 'string':
             self.expect('OP', '[')
             size_tok = self.advance()
+            if size_tok.type not in ('NUMBER', 'NAME'):
+                raise ParseError(
+                    f"Line {size_tok.line}: string size must be a number or constant, "
+                    f"got {size_tok.type} {size_tok.value!r}"
+                )
             size = str(size_tok.value)
             self.expect('OP', ']')
         return vtype, size
@@ -315,8 +315,6 @@ class Parser:
             self.advance()
             init = self.parse_expr()
         return VarDecl(name, vtype, size, init)
-
-    # ---- fungsi / command -------------------------------------------------
 
     def parse_param_list(self):
         params = []
@@ -356,14 +354,11 @@ class Parser:
             self.skip_newlines()
         return stmts
 
-    # ---- statement --------------------------------------------------------
-
     def parse_statement(self):
         if self.at('INDENT'):
             t = self.peek()
             raise ParseError(
-                f"Baris {t.line}: indentasi tidak terduga (kelebihan spasi "
-                f"dibandingkan baris sebelumnya)."
+                f"Line {t.line}: unexpected indentation (extra spaces compared to the previous line)."
             )
         if self.at('NAME', 'let'):
             d = self.parse_var_decl()
@@ -400,9 +395,9 @@ class Parser:
                 self.expect('NEWLINE')
                 return ExprStmt(CallExpr(name, args))
             t = self.peek()
-            raise ParseError(f"Baris {t.line}: statement tidak valid setelah '{name}'")
+            raise ParseError(f"Line {t.line}: invalid statement after '{name}'")
         t = self.peek()
-        raise ParseError(f"Baris {t.line}: statement tidak valid: {t.value!r}")
+        raise ParseError(f"Line {t.line}: invalid statement: {t.value!r}")
 
     def parse_if(self):
         self.expect('NAME', 'if')
@@ -430,8 +425,6 @@ class Parser:
                 break
         return node
 
-    # ---- kondisi (if/else) --------------------------------------------------
-
     def parse_comparison(self):
         left = self.parse_expr()
         if self.at('NAME', 'bigger') and self.peek(1).type == 'NAME' and self.peek(1).value == 'is':
@@ -445,7 +438,7 @@ class Parser:
         elif self.at('NAME') and self.peek().value in CMP_KEYWORDS:
             op = CMP_KEYWORDS[self.advance().value]
         else:
-            return left  # bare truthy check, contoh: "if try"
+            return left
         right = self.parse_expr()
         return Compare(op, left, right)
 
@@ -456,8 +449,6 @@ class Parser:
             rhs = self.parse_comparison()
             node = Logic(op, node, rhs)
         return node
-
-    # ---- ekspresi ------------------------------------------------------------
 
     def parse_arg_list(self):
         args = []
@@ -490,6 +481,13 @@ class Parser:
     def parse_factor(self):
         if self.at('OP', '-'):
             self.advance()
+            if self.at('NUMBER'):
+                raw = self.advance().value
+                if raw.lower().startswith('0x'):
+                    return Lit('-' + raw, 'hex')
+                if '.' in raw:
+                    return Lit(-float(raw), 'number')
+                return Lit(-int(raw), 'number')
             node = self.parse_factor()
             return BinOp('-', Lit(0, 'number'), node)
         if self.at('OP', '('):
@@ -524,18 +522,20 @@ class Parser:
                 return Index(name, idx)
             return Ident(name)
         t = self.peek()
-        raise ParseError(f"Baris {t.line}: ekspresi tidak valid di '{t.value!r}'")
+        raise ParseError(f"Line {t.line}: invalid expression at '{t.value!r}'")
 
 
- 
-# 5. TABEL MAPPING (callback & native) - lihat guide.txt untuk daftar lengkap
- 
+
+# 5. MAPPING TABLES (callback & native) - see guide.txt for the full list
+
 
 CALLBACKS = {
     'OnGame': 'OnGameModeInit',
     'OnGameExit': 'OnGameModeExit',
+    'IncomingConnection': 'OnIncomingConnection',
     'PlayerJoin': 'OnPlayerConnect',
     'PlayerLeave': 'OnPlayerDisconnect',
+    'PlayerFinishedDownloading': 'OnPlayerFinishedDownloading',
     'PlayerChat': 'OnPlayerText',
     'PlayerCommand': 'OnPlayerCommandText',
     'PlayerSpawn': 'OnPlayerSpawn',
@@ -545,6 +545,7 @@ CALLBACKS = {
     'PlayerEnterVehicle': 'OnPlayerEnterVehicle',
     'PlayerExitVehicle': 'OnPlayerExitVehicle',
     'PlayerStateChange': 'OnPlayerStateChange',
+    'PlayerInteriorChange': 'OnPlayerInteriorChange',
     'PlayerKeyChange': 'OnPlayerKeyStateChange',
     'PlayerUpdate': 'OnPlayerUpdate',
     'PlayerStreamIn': 'OnPlayerStreamIn',
@@ -557,9 +558,14 @@ CALLBACKS = {
     'PlayerClickPlayer': 'OnPlayerClickPlayer',
     'PlayerClickMap': 'OnPlayerClickMap',
     'PlayerClickTextDraw': 'OnPlayerClickTextDraw',
+    'PlayerClickPlayerTextDraw': 'OnPlayerClickPlayerTextDraw',
     'PlayerGiveDamage': 'OnPlayerGiveDamage',
     'PlayerTakeDamage': 'OnPlayerTakeDamage',
+    'PlayerGiveDamageActor': 'OnPlayerGiveDamageActor',
     'PlayerWeaponShot': 'OnPlayerWeaponShot',
+    'PlayerEditObject': 'OnPlayerEditObject',
+    'PlayerEditAttachedObject': 'OnPlayerEditAttachedObject',
+    'PlayerSelectObject': 'OnPlayerSelectObject',
     'VehicleSpawn': 'OnVehicleSpawn',
     'VehicleDeath': 'OnVehicleDeath',
     'VehicleMod': 'OnVehicleMod',
@@ -568,33 +574,57 @@ CALLBACKS = {
     'VehicleDamage': 'OnVehicleDamageStatusUpdate',
     'VehicleStreamIn': 'OnVehicleStreamIn',
     'VehicleStreamOut': 'OnVehicleStreamOut',
+    'VehicleSirenStateChange': 'OnVehicleSirenStateChange',
+    'TrailerUpdate': 'OnTrailerUpdate',
+    'UnoccupiedVehicleUpdate': 'OnUnoccupiedVehicleUpdate',
+    'ActorStreamIn': 'OnActorStreamIn',
+    'ActorStreamOut': 'OnActorStreamOut',
+    'NPCSpawn': 'OnNPCSpawn',
+    'NPCDeath': 'OnNPCDeath',
+    'NPCRespawn': 'OnNPCRespawn',
+    'NPCTakeDamage': 'OnNPCTakeDamage',
     'DialogResponse': 'OnDialogResponse',
     'RconCommand': 'OnRconCommand',
+    'RconLogin': 'OnRconLoginAttempt',
 }
 
-# Dipakai cuma untuk peringatan jumlah parameter (bukan validasi keras)
 CALLBACK_PARAM_COUNT = {
     'OnGameModeInit': 0, 'OnGameModeExit': 0,
+    'OnIncomingConnection': 3,
     'OnPlayerConnect': 1, 'OnPlayerDisconnect': 2,
+    'OnPlayerFinishedDownloading': 2,
     'OnPlayerText': 2, 'OnPlayerCommandText': 2,
     'OnPlayerSpawn': 1, 'OnPlayerDeath': 3,
     'OnPlayerRequestClass': 2, 'OnPlayerRequestSpawn': 1,
     'OnPlayerEnterVehicle': 3, 'OnPlayerExitVehicle': 2,
-    'OnPlayerStateChange': 3, 'OnPlayerKeyStateChange': 3,
+    'OnPlayerStateChange': 3,
+    'OnPlayerInteriorChange': 3,
+    'OnPlayerKeyStateChange': 3,
     'OnPlayerUpdate': 1, 'OnPlayerStreamIn': 2, 'OnPlayerStreamOut': 2,
     'OnPlayerPickUpPickup': 2, 'OnPlayerEnterCheckpoint': 1,
     'OnPlayerLeaveCheckpoint': 1, 'OnPlayerEnterRaceCheckpoint': 1,
     'OnPlayerLeaveRaceCheckpoint': 1, 'OnPlayerClickPlayer': 3,
-    'OnPlayerClickMap': 2, 'OnPlayerClickTextDraw': 2,
-    'OnPlayerGiveDamage': 4, 'OnPlayerTakeDamage': 4,
-    'OnPlayerWeaponShot': 4, 'OnVehicleSpawn': 1, 'OnVehicleDeath': 2,
+    'OnPlayerClickMap': 4, 'OnPlayerClickTextDraw': 2,
+    'OnPlayerClickPlayerTextDraw': 2,
+    'OnPlayerGiveDamage': 5, 'OnPlayerTakeDamage': 5,
+    'OnPlayerGiveDamageActor': 5,
+    'OnPlayerWeaponShot': 7,
+    'OnPlayerEditObject': 8,
+    'OnPlayerEditAttachedObject': 11,
+    'OnPlayerSelectObject': 6,
+    'OnVehicleSpawn': 1, 'OnVehicleDeath': 2,
     'OnVehicleMod': 3, 'OnVehiclePaintjob': 3, 'OnVehicleRespray': 4,
-    'OnVehicleDamageStatusUpdate': 2, 'OnVehicleStreamIn': 2,
-    'OnVehicleStreamOut': 2, 'OnDialogResponse': 5, 'OnRconCommand': 1,
+    'OnVehicleDamageStatusUpdate': 2,
+    'OnVehicleStreamIn': 2, 'OnVehicleStreamOut': 2,
+    'OnVehicleSirenStateChange': 3,
+    'OnTrailerUpdate': 2,
+    'OnUnoccupiedVehicleUpdate': 7,
+    'OnActorStreamIn': 2, 'OnActorStreamOut': 2,
+    'OnNPCSpawn': 1, 'OnNPCDeath': 3, 'OnNPCRespawn': 1, 'OnNPCTakeDamage': 4,
+    'OnDialogResponse': 5,
+    'OnRconCommand': 1, 'OnRconLoginAttempt': 3,
 }
 
-# name -> dict(pawn=<nama native asli>, refs=[index argumen yg butuh '&'],
-#              fills_buffer=True jika native itu mengisi buffer string lewat argumen)
 NATIVES = {
     'GetMoney': dict(pawn='GetPlayerMoney'),
     'GiveMoney': dict(pawn='GivePlayerMoney'),
@@ -614,6 +644,8 @@ NATIVES = {
     'SetVirtualWorld': dict(pawn='SetPlayerVirtualWorld'),
     'GetName': dict(pawn='GetPlayerName', fills_buffer=True),
     'SetName': dict(pawn='SetPlayerName'),
+    'GetIP': dict(pawn='GetPlayerIp', fills_buffer=True),
+    'GetPing': dict(pawn='GetPlayerPing'),
     'GetSkin': dict(pawn='GetPlayerSkin'),
     'SetSkin': dict(pawn='SetPlayerSkin'),
     'GetScore': dict(pawn='GetPlayerScore'),
@@ -621,76 +653,107 @@ NATIVES = {
     'GetWanted': dict(pawn='GetPlayerWantedLevel'),
     'SetWanted': dict(pawn='SetPlayerWantedLevel'),
     'GetState': dict(pawn='GetPlayerState'),
+    'GetSpecialAction': dict(pawn='GetPlayerSpecialAction'),
+    'SetSpecialAction': dict(pawn='SetPlayerSpecialAction'),
+    'GetKeys': dict(pawn='GetPlayerKeys', refs=[1, 2, 3]),
     'IsConnected': dict(pawn='IsPlayerConnected'),
     'IsInVehicle': dict(pawn='IsPlayerInVehicle'),
     'IsInAnyVehicle': dict(pawn='IsPlayerInAnyVehicle'),
+    'IsStreamedIn': dict(pawn='IsPlayerStreamedIn'),
     'IsNPC': dict(pawn='IsPlayerNPC'),
     'IsAdmin': dict(pawn='IsPlayerAdmin'),
     'IsInRange': dict(pawn='IsPlayerInRangeOfPoint'),
+    'GetDistance': dict(pawn='GetPlayerDistanceFromPoint'),
     'SetTeam': dict(pawn='SetPlayerTeam'),
     'GetTeam': dict(pawn='GetPlayerTeam'),
     'SetColor': dict(pawn='SetPlayerColor'),
     'GetColor': dict(pawn='GetPlayerColor'),
     'SetControllable': dict(pawn='TogglePlayerControllable'),
     'SetSpectating': dict(pawn='TogglePlayerSpectating'),
+    'SpectatePlayer': dict(pawn='PlayerSpectatePlayer'),
+    'SpectateVehicle': dict(pawn='PlayerSpectateVehicle'),
     'Kick': dict(pawn='Kick'),
     'Ban': dict(pawn='Ban'),
     'BanEx': dict(pawn='BanEx'),
     'Spawn': dict(pawn='SpawnPlayer'),
+    'ForceSpawn': dict(pawn='SpawnPlayer'),
     'GiveWeapon': dict(pawn='GivePlayerWeapon'),
     'ResetWeapons': dict(pawn='ResetPlayerWeapons'),
     'GetWeapon': dict(pawn='GetPlayerWeapon'),
     'GetAmmo': dict(pawn='GetPlayerAmmo'),
+    'SetAmmo': dict(pawn='SetPlayerAmmo'),
+    'SetArmedWeapon': dict(pawn='SetPlayerArmedWeapon'),
     'SendAll': dict(pawn='SendClientMessageToAll'),
+    'SendPlayerMsg': dict(pawn='SendPlayerMessageToPlayer'),
+    'SendPlayerMsgAll': dict(pawn='SendPlayerMessageToAll'),
     'GameText': dict(pawn='GameTextForPlayer'),
     'GameTextAll': dict(pawn='GameTextForAll'),
+    'PlaySound': dict(pawn='PlayerPlaySound'),
+    'StopSound': dict(pawn='StopAudioStreamForPlayer'),
+    'PlayAudio': dict(pawn='PlayAudioStreamForPlayer'),
+    'Animation': dict(pawn='ApplyAnimation'),
+    'ClearAnim': dict(pawn='ClearAnimations'),
+    'GetAnimIndex': dict(pawn='GetPlayerAnimationIndex'),
+    'SetChatBubble': dict(pawn='SetPlayerChatBubble'),
+    'SetCamera': dict(pawn='SetPlayerCameraPos'),
+    'SetCameraLookAt': dict(pawn='SetPlayerCameraLookAt'),
+    'CameraBehind': dict(pawn='SetCameraBehindPlayer'),
+    'GetCameraPos': dict(pawn='GetPlayerCameraPos', refs=[1, 2, 3]),
+    'ShowDialog': dict(pawn='ShowPlayerDialog'),
+    'HideDialog': dict(pawn='HidePlayerDialog'),
     'PutInVehicle': dict(pawn='PutPlayerInVehicle'),
+    'RemoveFromVehicle': dict(pawn='RemovePlayerFromVehicle'),
     'GetVehicleID': dict(pawn='GetPlayerVehicleID'),
     'GetVehicleSeat': dict(pawn='GetPlayerVehicleSeat'),
+    'CreateVeh': dict(pawn='CreateVehicle'),
     'GetVehiclePos': dict(pawn='GetVehiclePos', refs=[1, 2, 3]),
     'SetVehiclePos': dict(pawn='SetVehiclePos'),
     'GetVehicleHealth': dict(pawn='GetVehicleHealth', refs=[1]),
     'SetVehicleHealth': dict(pawn='SetVehicleHealth'),
+    'GetVehicleZAngle': dict(pawn='GetVehicleZAngle', refs=[1]),
+    'SetVehicleZAngle': dict(pawn='SetVehicleZAngle'),
+    'AddComponent': dict(pawn='AddVehicleComponent'),
+    'RemoveComponent': dict(pawn='RemoveVehicleComponent'),
     'Repair': dict(pawn='RepairVehicle'),
     'DestroyVehicle': dict(pawn='DestroyVehicle'),
+    'LinkToInterior': dict(pawn='LinkVehicleToInterior'),
 }
 
 
- 
+
 # 6. CODE GENERATOR
- 
+
 
 INDENT_UNIT = '    '
 
 
 class CodeGen:
     def __init__(self):
+        self.global_types = {}
         self.var_types = {}
         self.warnings = []
 
     def pad(self, level):
         return INDENT_UNIT * level
 
-    # ---- entry point -----------------------------------------------------
+    def _warn(self, msg):
+        if msg not in self.warnings:
+            self.warnings.append(msg)
 
-    def gen_program(self, prog: Program, includes):
+    def gen_program(self, prog: Program, directives):
+        self.global_types = {}
         self.var_types = {}
         self.warnings = []
         for node in prog.body:
             if isinstance(node, VarDecl):
-                self.var_types[node.name] = node.vtype
-            elif isinstance(node, FuncDef):
-                for prm in node.params:
-                    if prm.endswith('[]'):
-                        self.var_types[prm[:-2]] = 'string'
-                self._collect_types(node.body)
+                self.global_types[node.name] = node.vtype
 
         lines = []
         seen = set()
-        for inc in includes:
-            if inc not in seen:
-                lines.append(inc)
-                seen.add(inc)
+        for d in directives:
+            if d not in seen:
+                lines.append(d)
+                seen.add(d)
         if lines:
             lines.append('')
 
@@ -710,16 +773,18 @@ class CodeGen:
                 if s.else_body:
                     self._collect_types(s.else_body)
 
-    # ---- top level ---------------------------------------------------------
-
     def gen_top(self, node):
         if isinstance(node, VarDecl):
+            self.var_types = dict(self.global_types)
             return self.gen_vardecl(node, 0)
         if isinstance(node, FuncDef):
+            self.var_types = dict(self.global_types)
+            for prm in node.params:
+                if prm.endswith('[]'):
+                    self.var_types[prm[:-2]] = 'string'
+            self._collect_types(node.body)
             return self.gen_funcdef(node)
-        raise CompileError(f"Node top-level tidak dikenal: {node}")
-
-    # ---- deklarasi variabel -------------------------------------------------
+        raise CompileError(f"Unknown top-level node: {node}")
 
     def gen_vardecl(self, node: VarDecl, level):
         p = self.pad(level)
@@ -748,22 +813,27 @@ class CodeGen:
                 args.append(str(size))
                 call_line = f"{p}{spec['pawn']}({', '.join(args)});"
                 return decl_line + '\n' + call_line
-            init = f" = {self.gen_expr(node.init)}" if node.init is not None else ''
-            return f"{p}new {name}[{size}]{init};"
+            if isinstance(node.init, Lit) and node.init.kind == 'string':
+                return f'{p}new {name}[{size}] = "{node.init.value}";'
+            if node.init is not None:
+                decl_line = f"{p}new {name}[{size}];"
+                fmt_line = f'{p}format({name}, sizeof({name}), "%s", {self.gen_expr(node.init)});'
+                return decl_line + '\n' + fmt_line
+            return f"{p}new {name}[{size}];"
 
-        raise CompileError(f"Tipe data tidak dikenal: {node.vtype}")
+        raise CompileError(f"Unknown data type: {node.vtype}")
 
     def gen_float_expr(self, node):
         if isinstance(node, Lit) and node.kind == 'number':
-            return str(float(node.value))
+            return repr(float(node.value))
         return self.gen_expr(node)
-
-    # ---- ekspresi -------------------------------------------------------------
 
     def is_string_expr(self, node):
         if isinstance(node, Lit) and node.kind == 'string':
             return True
         if isinstance(node, Ident) and self.var_types.get(node.name) == 'string':
+            return True
+        if isinstance(node, CallExpr) and node.name in ('GetName', 'GetIP'):
             return True
         return False
 
@@ -785,7 +855,7 @@ class CodeGen:
             return f"({self.gen_expr(node.left)} {node.op} {self.gen_expr(node.right)})"
         if isinstance(node, CallExpr):
             return self.gen_call(node)
-        raise CompileError(f"Ekspresi tidak dikenal: {node}")
+        raise CompileError(f"Unknown expression: {node}")
 
     def gen_call(self, node: CallExpr):
         name = node.name
@@ -794,14 +864,14 @@ class CodeGen:
             args = node.args
             if len(args) == 2:
                 target = self.gen_expr(args[0])
-                color = '0x00FF00FF'
+                color = '-1'
                 text = self.gen_expr(args[1])
             elif len(args) == 3:
                 target = self.gen_expr(args[0])
                 color = self.gen_expr(args[1])
                 text = self.gen_expr(args[2])
             else:
-                raise CompileError("Send butuh 2 atau 3 argumen: Send(id, [color], text)")
+                raise CompileError("Send requires 2 or 3 arguments: Send(id, [color], text)")
             return f"SendClientMessage({target}, {color}, {text})"
 
         if name == 'GetParams':
@@ -812,9 +882,9 @@ class CodeGen:
             spec = NATIVES[name]
             if spec.get('fills_buffer'):
                 raise CompileError(
-                    f"'{name}' hanya boleh dipakai langsung dalam bentuk "
-                    f"'let nama : string[N] = {name}(...)', tidak bisa dipakai "
-                    f"di dalam ekspresi/statement lain."
+                    f"'{name}' may only be used directly in the form "
+                    f"'let varname : string[N] = {name}(...)'; it cannot be used "
+                    f"inside other expressions or statements."
                 )
             refs = spec.get('refs', [])
             args = []
@@ -825,11 +895,8 @@ class CodeGen:
                 args.append(s)
             return f"{spec['pawn']}({', '.join(args)})"
 
-        # passthrough: native SA-MP lain atau fungsi buatan sendiri
         args = [self.gen_expr(a) for a in node.args]
         return f"{name}({', '.join(args)})"
-
-    # ---- kondisi if/else --------------------------------------------------------
 
     def gen_compare(self, node: Compare):
         l_is_str = self.is_string_expr(node.left)
@@ -838,12 +905,12 @@ class CodeGen:
         r = self.gen_expr(node.right)
         if l_is_str or r_is_str:
             if node.op == '==':
-                return f"strcmp({l}, {r}) == 0"
+                return f"strcmp({l}, {r}, false) == 0"
             if node.op == '!=':
-                return f"strcmp({l}, {r}) != 0"
-            self.warnings.append(
-                "operator 'bigger'/'smaller' dipakai pada string; Pawn tidak punya "
-                "perbandingan string > atau <, hasilnya kemungkinan tidak sesuai harapan."
+                return f"strcmp({l}, {r}, false) != 0"
+            self._warn(
+                "operator 'bigger'/'smaller' used on a string value; Pawn has no "
+                "string ordering operators, the result likely won't behave as expected."
             )
         return f"{l} {node.op} {r}"
 
@@ -855,8 +922,6 @@ class CodeGen:
             right = self.gen_cond(node.right)
             return f"({left} {node.op} {right})"
         return self.gen_expr(node)
-
-    # ---- statement ----------------------------------------------------------------
 
     def gen_stmt(self, node, level):
         p = self.pad(level)
@@ -876,7 +941,7 @@ class CodeGen:
             return f"{p}{self.gen_call(node.expr)};"
         if isinstance(node, If):
             return self.gen_if(node, level)
-        raise CompileError(f"Statement tidak dikenal: {node}")
+        raise CompileError(f"Unknown statement: {node}")
 
     def gen_if(self, node: If, level):
         p = self.pad(level)
@@ -895,20 +960,23 @@ class CodeGen:
             out.append(f"{p}}}")
         return '\n'.join(out)
 
-    # ---- fungsi / callback / command ------------------------------------------------
-
     def gen_funcdef(self, node: FuncDef, level=0):
         p = self.pad(level)
         if node.is_command:
+            if len(node.params) >= 2 and not node.params[1].endswith('[]'):
+                self._warn(
+                    f"command '{node.name}' has parameter '{node.params[1]}' without [] — "
+                    f"command arguments must be declared as a string array, e.g. params[]."
+                )
             sig = f"{p}CMD:{node.name}({', '.join(node.params)})"
         elif node.name in CALLBACKS:
             pawn_name = CALLBACKS[node.name]
             expected = CALLBACK_PARAM_COUNT.get(pawn_name)
             got = len(node.params)
             if expected is not None and expected != got:
-                self.warnings.append(
-                    f"'{node.name}' ({pawn_name}) biasanya punya {expected} parameter, "
-                    f"tapi kamu menulis {got}. Cek lagi urutan & jumlah parameternya."
+                self._warn(
+                    f"'{node.name}' ({pawn_name}) is normally declared with {expected} parameter(s), "
+                    f"but you wrote {got}. Double-check the order and count."
                 )
             sig = f"{p}public {pawn_name}({', '.join(node.params)})"
         else:
@@ -919,22 +987,22 @@ class CodeGen:
         return f"{sig}\n{p}{{\n{body}\n{p}}}"
 
 
- 
+
 # 7. CLI
- 
+
 
 HEADER_TEMPLATE = (
-   "// Samp Language Compiler\n"
+   "// Samp Language Compiler v{ver} - generated from {src}\n"
 )
 
 
 def compile_source(source, src_name="?"):
-    tokens, includes = tokenize(source)
+    tokens, directives = tokenize(source)
     parser = Parser(tokens)
     prog = parser.parse_program()
     gen = CodeGen()
-    code = gen.gen_program(prog, includes)
-    return HEADER_TEMPLATE.format(src=src_name) + code, gen.warnings
+    code = gen.gen_program(prog, directives)
+    return HEADER_TEMPLATE.format(src=src_name, ver=VERSION) + code, gen.warnings
 
 
 def compile_file(path):
@@ -955,21 +1023,21 @@ def gather_files(args):
         elif os.path.isfile(target):
             files.append(target)
         else:
-            print(f"[SKIP] '{target}' tidak ditemukan.")
+            print(f"[SKIP] '{target}' not found.")
     return files
 
 
 def main():
     print(f"SAMPL Compiler v{VERSION}")
     if len(sys.argv) < 2:
-        print("Pemakaian:")
+        print("Usage:")
         print("  python smplc.py file1.smpl [file2.smpl ...]")
         print("  python smplc.py folder/")
         sys.exit(1)
 
     files = gather_files(sys.argv[1:])
     if not files:
-        print("Tidak ada file .smpl yang ditemukan.")
+        print("No .smpl files found.")
         sys.exit(1)
 
     ok = 0
@@ -981,9 +1049,9 @@ def main():
                 print(f"   \u26a0 {w}")
             ok += 1
         except (LexError, ParseError, CompileError) as e:
-            print(f"[GAGAL] {f}: {e}")
+            print(f"[FAIL] {f}: {e}")
 
-    print(f"\nSelesai: {ok}/{len(files)} file berhasil dikonversi.")
+    print(f"\nDone: {ok}/{len(files)} file(s) compiled successfully.")
 
 
 if __name__ == '__main__':
